@@ -1,0 +1,34 @@
+# ============================================================
+# Prometheus 抓取配置
+# 说明：
+#   host.docker.internal 由 docker-compose 的 extra_hosts 注入，
+#   指向"运行 Docker 的宿主机"——也就是跑 mall-admin 的那台机器。
+#   如果你把 mall-admin 也容器化了，把 target 换成容器名:8080 即可。
+# ============================================================
+global:
+  scrape_interval: 15s      # 抓取频率
+  evaluation_interval: 15s  # 告警规则计算频率
+  external_labels:
+    env: dev
+
+scrape_configs:
+  # Spring Boot 应用（Actuator 暴露的 Micrometer 指标）
+  - job_name: 'mall-admin'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8080']
+        labels:
+          application: 'mall-admin'
+
+  # 前台商城服务（启动 mall-portal 后可放开，需先在 portal 引入 micrometer-registry-prometheus）
+  # - job_name: 'mall-portal'
+  #   metrics_path: '/actuator/prometheus'
+  #   static_configs:
+  #     - targets: ['host.docker.internal:8085']
+  #       labels:
+  #         application: 'mall-portal'
+
+  # Prometheus 自身
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

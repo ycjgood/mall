@@ -14,6 +14,14 @@ public class ApiException extends RuntimeException {
         this.errorCode = errorCode;
     }
 
+    /**
+     * 使用指定错误码，但覆盖提示信息（例如限流时提示"请 12 秒后重试"）
+     */
+    public ApiException(IErrorCode errorCode, String message) {
+        super(message);
+        this.errorCode = errorCode;
+    }
+
     public ApiException(String message) {
         super(message);
     }

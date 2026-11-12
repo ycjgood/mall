@@ -17,6 +17,10 @@ public class CommonResult<T> {
      * 数据封装
      */
     private T data;
+    /**
+     * 链路追踪ID，出现异常时用于在日志中定位整条调用链（同时通过响应头 X-Trace-Id 返回）
+     */
+    private String traceId;
 
     protected CommonResult() {
     }
@@ -129,5 +133,21 @@ public class CommonResult<T> {
 
     public void setData(T data) {
         this.data = data;
+    }
+
+    public String getTraceId() {
+        return traceId;
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
+    }
+
+    /**
+     * 链式设置 traceId，便于在异常处理器中一行完成赋值
+     */
+    public CommonResult<T> withTraceId(String traceId) {
+        this.traceId = traceId;
+        return this;
     }
 }

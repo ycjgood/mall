@@ -6,6 +6,7 @@
 #   docker compose --profile mongo up -d  # 追加 MongoDB（会员浏览记录需要）
 #   docker compose --profile search up -d # 追加 Elasticsearch（mall-search 需要）
 #   docker compose --profile minio up -d  # 追加独立 MinIO（不依赖虚拟机里 Milvus 自带的那个）
+#   docker compose --profile monitoring up -d # 追加 Prometheus + Grafana（监控 mall-admin）
 #   docker compose logs -f mysql          # 看初始化日志
 #   docker compose down                   # 停止（保留数据）
 #   docker compose down -v                # 停止并清空数据（谨慎）
@@ -108,6 +109,48 @@ services:
     volumes:
       - mall-minio-data:/data
 
+  # ============ 可观测性（Prometheus + Grafana） ============
+  # 启动：docker compose --profile monitoring up -d
+  # Prometheus: http://<VM_IP>:9090   Grafana: http://<VM_IP>:3000 (admin/admin)
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:v2.54.1
+    container_name: mall-prometheus
+    restart: unless-stopped
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - mall-prometheus-data:/prometheus
+    # 让容器内可以用 host.docker.internal 访问宿主机上跑的 mall-admin
+    # 默认 host-gateway 指向 Docker 网关（应用也跑在同一台机器时用）；
+    # 如果应用跑在别的机器（例如 Windows 宿主机），在 .env 里把 MALL_HOST_IP 改成该机器 IP
+    extra_hosts:
+      - "host.docker.internal:${MALL_HOST_IP:-host-gateway}"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+
+  grafana:
+    profiles: ["monitoring"]
+    image: grafana/grafana:11.2.0
+    container_name: mall-grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASS:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      TZ: Asia/Shanghai
+    volumes:
+      - mall-grafana-data:/var/lib/grafana
+      # 数据源与看板随容器启动自动注入，无需手工配置
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+
 volumes:
   mall-mysql-data:
   mall-redis-data:
@@ -115,3 +158,5 @@ volumes:
   mall-mongo-data:
   mall-es-data:
   mall-minio-data:
+  mall-prometheus-data:
+  mall-grafana-data:

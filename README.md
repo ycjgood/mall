@@ -12,6 +12,27 @@
   <a href="https://gitee.com/macrozheng/mall"><img src="http://macro-oss.oss-cn-shenzhen.aliyuncs.com/mall/badge/%E7%A0%81%E4%BA%91-%E9%A1%B9%E7%9B%AE%E5%9C%B0%E5%9D%80-orange.svg" alt="码云"></a>
 </p>
 
+## 本仓库的工程化改造说明
+
+本项目基于 [macrozheng/mall](https://github.com/macrozheng/mall)（Apache 2.0）学习，并在其之上做了两轮面向生产环境的工程化改造：
+
+**第一层：交付与质量底座**
+
+- `docker-compose.yml` 一键编排中间件（MySQL/Redis 核心，RabbitMQ/MongoDB/ES/MinIO 按 profile 启用），**首次启动自动建库导表**
+- 修复根 pom `skipTests=true` 与 docker-maven-plugin 绑定 `package` 导致构建必失败的问题
+- 补齐单元测试（Mockito），集成测试经 surefire 排除，构建不再依赖外部数据库
+- GitHub Actions CI：JDK 17 + Maven 缓存 + 全量构建 + 测试报告归档
+
+**第二层：稳定性与可观测性**
+
+- 统一错误码（400/401/404/429/503）+ 全局异常分类处理，未知异常不泄露堆栈，响应统一带 `traceId`
+- `TraceIdFilter` 链路追踪：日志格式与响应头 `X-Trace-Id` 一致，一次请求可完整串联
+- 日志脱敏（密码/token/密钥等 13 类字段）+ 超长报文截断 + 慢请求（>500ms）告警
+- Actuator + Prometheus 指标导出，Grafana 看板随容器自动注入（QPS / P95 / 错误率 / JVM / 线程池 / 连接池）
+- Redis + Lua 原子限流（`@RateLimit` 注解），已应用于后台登录、会员登录、下单接口，Redis 故障自动降级放行
+
+详细说明见：[工程化底座方案.md](./工程化底座方案.md) ｜ [监控与稳定性方案.md](./监控与稳定性方案.md)
+
 ## 友情提示
 
 > 1. **快速体验项目**：[在线访问地址](https://www.macrozheng.com/admin/index.html) 。

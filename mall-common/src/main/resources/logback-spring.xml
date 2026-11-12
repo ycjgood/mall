@@ -3,10 +3,22 @@
 <configuration>
     <!--配置不打印logback内部的状态信息，排查logback配置问题时可注释掉-->
     <statusListener class="ch.qos.logback.core.status.NopStatusListener" />
-    <!--引用默认日志配置-->
+
+    <!--
+      日志格式说明（企业级日志规范）：
+      1. 时间精确到毫秒，便于按时间窗口排查
+      2. 级别定宽，便于 grep / 日志平台解析
+      3. [traceId] 来自 MDC（TraceIdFilter 写入），一次请求的所有日志可用同一个 traceId 串起来
+      4. 文件名与行号只在文件日志中输出（控制台输出会拖慢 IDE 调试）
+    -->
+    <property name="CONSOLE_LOG_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %highlight(%-5level) [%thread] [%X{traceId:-}] %cyan(%logger{36}) - %msg%n"/>
+    <property name="FILE_LOG_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] [%X{traceId:-}] %logger{36} - %msg%n"/>
+    <property name="CONSOLE_LOG_CHARSET" value="UTF-8"/>
+
+    <!--引用默认日志配置（提供转换器、默认属性等）-->
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
-    <!--使用默认的控制台日志输出实现-->
-    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
     <!--应用名称-->
     <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="springBoot"/>
     <!--日志文件保存路径-->
@@ -15,6 +27,14 @@
     <springProperty name="LOG_STASH_HOST" scope="context" source="logstash.host" defaultValue="localhost"/>
     <!--是否开启LogStash日志输出，true启用，false禁用-->
     <springProperty name="ENABLE_LOG_STASH" scope="context" source="logstash.enableInnerLog" defaultValue="false"/>
+
+    <!--控制台输出（开发环境）-->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+            <charset>${CONSOLE_LOG_CHARSET}</charset>
+        </encoder>
+    </appender>
 
     <!--DEBUG日志输出到文件-->
     <appender name="FILE_DEBUG"
@@ -90,6 +110,7 @@
                                 "level": "%level",
                                 "service": "${APP_NAME:-}",
                                 "pid": "${PID:-}",
+                                "traceId": "%X{traceId:-}",
                                 "thread": "%thread",
                                 "class": "%logger",
                                 "message": "%message",
@@ -123,6 +144,7 @@
                                 "level": "%level",
                                 "service": "${APP_NAME:-}",
                                 "pid": "${PID:-}",
+                                "traceId": "%X{traceId:-}",
                                 "thread": "%thread",
                                 "class": "%logger",
                                 "message": "%message",
@@ -151,6 +173,7 @@
                                 "level": "%level",
                                 "service": "${APP_NAME:-}",
                                 "pid": "${PID:-}",
+                                "traceId": "%X{traceId:-}",
                                 "thread": "%thread",
                                 "class": "%logger",
                                 "message": "%message",
@@ -178,6 +201,7 @@
                                 "project": "mall",
                                 "level": "%level",
                                 "service": "${APP_NAME:-}",
+                                "traceId": "%X{traceId:-}",
                                 "class": "%logger",
                                 "message": "%message"
                                 }

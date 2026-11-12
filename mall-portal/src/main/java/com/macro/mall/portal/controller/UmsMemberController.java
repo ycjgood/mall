@@ -1,6 +1,7 @@
 package com.macro.mall.portal.controller;
 
 import com.macro.mall.common.api.CommonResult;
+import com.macro.mall.common.ratelimit.RateLimit;
 import com.macro.mall.model.UmsMember;
 import com.macro.mall.portal.service.UmsMemberService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -46,6 +47,8 @@ public class UmsMemberController {
 
     @Operation(summary = "会员登录")
     @RequestMapping(value = "/login", method = RequestMethod.POST)
+    @RateLimit(key = "portal:login", permits = 5, window = 60, dimension = RateLimit.Dimension.IP,
+            message = "登录尝试过于频繁，请 %d 秒后重试")
     @ResponseBody
     public CommonResult login(@RequestParam String username,
                               @RequestParam String password) {

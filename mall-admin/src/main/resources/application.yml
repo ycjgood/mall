@@ -84,3 +84,29 @@ aliyun:
     callback: http://localhost:8080/aliyun/oss/callback # 文件上传成功后的回调地址
     dir:
       prefix: mall/images/ # 上传文件夹路径前缀
+
+# ============ 可观测性（Actuator + Prometheus） ============
+# 启动后访问 /actuator/health 看健康状态，/actuator/prometheus 看指标原文
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always # 展示各组件的健康明细（数据库、Redis、磁盘等）
+      probes:
+        enabled: true # 开启 liveness/readiness 探针，容器编排可用
+  metrics:
+    tags:
+      application: mall-admin # 所有指标统一打的标签，Grafana 里按此区分服务
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true # 输出直方图，才能算 P95/P99
+      slo:
+        http.server.requests: 50ms,100ms,200ms,500ms,1s # 按 SLO 分桶，直接看有多少请求超过 500ms
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
