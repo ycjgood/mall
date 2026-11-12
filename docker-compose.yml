@@ -1,0 +1,117 @@
+# ============================================================
+# mall 开发环境中间件编排
+# 用法：
+#   docker compose up -d                  # 核心：MySQL + Redis
+#   docker compose --profile mq up -d     # 追加 RabbitMQ（下单延迟队列需要）
+#   docker compose --profile mongo up -d  # 追加 MongoDB（会员浏览记录需要）
+#   docker compose --profile search up -d # 追加 Elasticsearch（mall-search 需要）
+#   docker compose --profile minio up -d  # 追加独立 MinIO（不依赖虚拟机里 Milvus 自带的那个）
+#   docker compose logs -f mysql          # 看初始化日志
+#   docker compose down                   # 停止（保留数据）
+#   docker compose down -v                # 停止并清空数据（谨慎）
+# ============================================================
+name: mall-infra
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mall-mysql
+    restart: unless-stopped
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: mall
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mall-mysql-data:/var/lib/mysql
+      # 首次启动自动执行 mall.sql 建表，无需手工导入
+      - ./document/sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p${MYSQL_ROOT_PASSWORD:-root} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  redis:
+    image: redis:7
+    container_name: mall-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - mall-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  rabbitmq:
+    profiles: ["mq"]
+    image: rabbitmq:3.12-management
+    container_name: mall-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_UI_PORT:-15672}:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-mall}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-mall}
+      TZ: Asia/Shanghai
+    volumes:
+      - mall-rabbitmq-data:/var/lib/rabbitmq
+
+  mongo:
+    profiles: ["mongo"]
+    image: mongo:5
+    container_name: mall-mongo
+    restart: unless-stopped
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mall-mongo-data:/data/db
+
+  elasticsearch:
+    profiles: ["search"]
+    image: elasticsearch:7.17.10
+    container_name: mall-es
+    restart: unless-stopped
+    ports:
+      - "${ES_PORT:-9200}:9200"
+    environment:
+      discovery.type: single-node
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+      xpack.security.enabled: "false"
+    volumes:
+      - mall-es-data:/usr/share/elasticsearch/data
+    # 虚拟机 8G 内存，ES 已限制 512m 堆，仍建议单独启动而非长期常驻
+
+  minio:
+    profiles: ["minio"]
+    image: minio/minio:latest
+    container_name: mall-minio
+    restart: unless-stopped
+    ports:
+      - "${MINIO_PORT:-19000}:9000"
+      - "${MINIO_UI_PORT:-19001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASS:-minioadmin}
+    command: server /data --console-address ":9001"
+    volumes:
+      - mall-minio-data:/data
+
+volumes:
+  mall-mysql-data:
+  mall-redis-data:
+  mall-rabbitmq-data:
+  mall-mongo-data:
+  mall-es-data:
+  mall-minio-data:

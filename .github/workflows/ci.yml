@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 配置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      # 单元测试已随 package 执行（集成测试在 pom 中通过 surefire excludes 排除）
+      - name: 编译 + 单元测试 + 打包
+        run: mvn -B -U clean package -DskipTests=false
+
+      - name: 归档测试报告（失败也上传，便于排查）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: '**/target/surefire-reports/*'
+          if-no-files-found: ignore

@@ -1,0 +1,16 @@
+# Maven #
+target/
+
+# IDEA #
+.idea/
+*.iml
+
+# Eclipse #
+.settings/
+.classpath
+.project
+
+# 本地环境配置（含密码，不提交） #
+.env
+*.local.yml
+logs/
