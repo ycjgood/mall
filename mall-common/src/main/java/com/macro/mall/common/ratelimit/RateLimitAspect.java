@@ -11,6 +11,7 @@ import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.core.annotation.Order;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -70,14 +71,24 @@ public class RateLimitAspect {
 
     private final StringRedisTemplate stringRedisTemplate;
     private final DefaultRedisScript<Long> rateLimitScript;
+    /**
+     * 全局开关：压测、本地联调时用 --mall.rate-limit.enabled=false 关闭，
+     * 避免限流把 TPS 压成 0 而无法测出真实容量。生产环境保持默认开启。
+     */
+    private final boolean enabled;
 
-    public RateLimitAspect(StringRedisTemplate stringRedisTemplate) {
+    public RateLimitAspect(StringRedisTemplate stringRedisTemplate,
+                           @Value("${mall.rate-limit.enabled:true}") boolean enabled) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.rateLimitScript = new DefaultRedisScript<>(LUA_SCRIPT, Long.class);
+        this.enabled = enabled;
     }
 
     @Around("@annotation(rateLimit)")
     public Object around(ProceedingJoinPoint joinPoint, RateLimit rateLimit) throws Throwable {
+        if (!enabled) {
+            return joinPoint.proceed();
+        }
         String redisKey = buildKey(joinPoint, rateLimit);
         Long ttl;
         try {

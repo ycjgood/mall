@@ -20,13 +20,13 @@ scrape_configs:
         labels:
           application: 'mall-admin'
 
-  # 前台商城服务（启动 mall-portal 后可放开，需先在 portal 引入 micrometer-registry-prometheus）
-  # - job_name: 'mall-portal'
-  #   metrics_path: '/actuator/prometheus'
-  #   static_configs:
-  #     - targets: ['host.docker.internal:8085']
-  #       labels:
-  #         application: 'mall-portal'
+  # 前台商城服务（mall-portal，前台下单链路的主战场，压测重点观测对象）
+  - job_name: 'mall-portal'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8085']
+        labels:
+          application: 'mall-portal'
 
   # Prometheus 自身
   - job_name: 'prometheus'

@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
 class RateLimitAspectTest {
 
     private final StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
-    private final RateLimitAspect aspect = new RateLimitAspect(redisTemplate);
+    private final RateLimitAspect aspect = new RateLimitAspect(redisTemplate, true);
 
     @AfterEach
     void clearRequest() {
@@ -83,6 +83,20 @@ class RateLimitAspectTest {
         Object result = aspect.around(joinPoint, rateLimitOf("doSomething"));
 
         assertThat(result).isEqualTo("ok");
+    }
+
+    @Test
+    @DisplayName("开关关闭：直接放行，不访问 Redis（供压测/联调使用）")
+    void shouldBypassWhenDisabled() throws Throwable {
+        prepareRequest();
+        ProceedingJoinPoint joinPoint = mockJoinPoint();
+        when(joinPoint.proceed()).thenReturn("ok");
+        RateLimitAspect disabledAspect = new RateLimitAspect(redisTemplate, false);
+
+        Object result = disabledAspect.around(joinPoint, rateLimitOf("doSomething"));
+
+        assertThat(result).isEqualTo("ok");
+        org.mockito.Mockito.verifyNoInteractions(redisTemplate);
     }
 
     private void prepareRequest() {

@@ -47,6 +47,11 @@
             <artifactId>alipay-sdk-java</artifactId>
             <version>${alipay-sdk.version}</version>
         </dependency>
+        <!--Prometheus 指标导出：暴露 /actuator/prometheus，压测与线上观测的数据源-->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
 
     </dependencies>
 

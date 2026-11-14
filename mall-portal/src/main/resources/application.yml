@@ -7,6 +7,11 @@ spring:
     pathmatch:
       matching-strategy: ant_path_matcher
 
+server:
+  tomcat:
+    mbeanregistry:
+      enabled: true # Spring Boot 3 默认关闭，开启后才有 tomcat_threads_* 线程池指标
+
 mybatis:
   mapper-locations:
     - classpath:dao/*.xml
@@ -74,3 +79,27 @@ rabbitmq:
     name:
       cancelOrder: cancelOrderQueue
 
+
+# 可观测性：与 mall-admin 保持一致，Prometheus 抓 /actuator/prometheus
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: mall-portal # 指标统一打标签，Grafana 按服务区分
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true # 输出直方图才能算 P95/P99
+      slo:
+        http.server.requests: 50ms,100ms,200ms,500ms,1s
+  prometheus:
+    metrics:
+      export:
+        enabled: true

@@ -17,3 +17,9 @@ logs/
 
 # ES IK 插件包（4.5MB 二进制，不入库，见 deploy/es/Dockerfile 注释）
 deploy/es/*.zip
+
+# 压测产物：含会员 JWT 与一次性下单令牌，禁止入库
+scripts/bench/bench.csv
+scripts/bench/players.tsv
+scripts/bench/*.jtl
+scripts/bench/*.log

@@ -69,6 +69,20 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
     @Autowired
     private CancelOrderSender cancelOrderSender;
 
+    /**
+     * 库存锁定实现模式：atomic=条件原子更新（默认，防超卖）；legacy=改造前的读改写（仅供压测对比）
+     */
+    private static final String LEGACY_STOCK_LOCK = "legacy";
+
+    @Value("${mall.order.stock-lock-mode:atomic}")
+    private String stockLockMode;
+
+    /**
+     * 幂等开关：默认开启。关闭仅用于压测对比"没有幂等保护"时的重复下单量
+     */
+    @Value("${mall.order.idempotent-enabled:true}")
+    private boolean idempotentEnabled;
+
     @Override
     public ConfirmOrderResult generateConfirmOrder(List<Long> cartIds) {
         ConfirmOrderResult result = new ConfirmOrderResult();
@@ -105,7 +119,9 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
         UmsMember currentMember = memberService.getCurrentMember();
         // 幂等校验必须放在最前面：令牌一次性消费，重复提交在这里就被拦住，
         // 不会走到后面的库存锁定和订单落库
-        idempotentSupport.consume(currentMember.getId(), orderToken);
+        if (idempotentEnabled) {
+            idempotentSupport.consume(currentMember.getId(), orderToken);
+        }
         List<OmsOrderItem> orderItemList = new ArrayList<>();
         //校验收货地址
         if(orderParam.getMemberReceiveAddressId()==null){
@@ -763,12 +779,32 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
      * 这里抛异常触发整个 {@code @Transactional} 回滚，前面已锁定的其它 SKU 也会一并回滚。
      */
     private void lockStock(List<CartPromotionItem> cartPromotionItemList) {
+        if (LEGACY_STOCK_LOCK.equals(stockLockMode)) {
+            lockStockLegacy(cartPromotionItemList);
+            return;
+        }
         for (CartPromotionItem cartPromotionItem : cartPromotionItemList) {
             int rows = portalOrderDao.lockSkuStock(cartPromotionItem.getProductSkuId(), cartPromotionItem.getQuantity());
             if (rows == 0) {
                 // 用商品名提示，前端可直接展示给用户
                 Asserts.fail("商品「" + cartPromotionItem.getProductName() + "」库存不足，请调整数量后重试");
             }
+        }
+    }
+
+    /**
+     * 改造前的库存锁定实现：先查、再算、最后整行写回。
+     * <p>
+     * <b>仅用于压测复现超卖，禁止在生产使用</b>（{@code mall.order.stock-lock-mode=legacy} 才会进入）。
+     * 两个并发请求可以同时通过 {@code hasStock} 校验并各自写回 lockStock+1，
+     * 后写者覆盖先写者，最终锁定数量少于实际下单数量 —— 这就是超卖。
+     */
+    @Deprecated
+    private void lockStockLegacy(List<CartPromotionItem> cartPromotionItemList) {
+        for (CartPromotionItem cartPromotionItem : cartPromotionItemList) {
+            PmsSkuStock skuStock = skuStockMapper.selectByPrimaryKey(cartPromotionItem.getProductSkuId());
+            skuStock.setLockStock(skuStock.getLockStock() + cartPromotionItem.getQuantity());
+            skuStockMapper.updateByPrimaryKeySelective(skuStock);
         }
     }
 
