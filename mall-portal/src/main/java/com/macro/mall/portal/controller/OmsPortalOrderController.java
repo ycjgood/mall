@@ -38,13 +38,22 @@ public class OmsPortalOrderController {
         return CommonResult.success(confirmOrderResult);
     }
 
+    @Operation(summary = "获取下单令牌（提交订单前调用，防止重复提交）")
+    @RequestMapping(value = "/token", method = RequestMethod.GET)
+    @ResponseBody
+    public CommonResult<String> generateOrderToken() {
+        return CommonResult.success(portalOrderService.generateOrderToken(), "获取成功");
+    }
+
     @Operation(summary = "根据购物车信息生成订单")
     @RequestMapping(value = "/generateOrder", method = RequestMethod.POST)
     @RateLimit(key = "portal:generateOrder", permits = 10, window = 60, dimension = RateLimit.Dimension.USER,
             message = "下单过于频繁，请 %d 秒后重试")
     @ResponseBody
-    public CommonResult generateOrder(@RequestBody OrderParam orderParam) {
-        Map<String, Object> result = portalOrderService.generateOrder(orderParam);
+    public CommonResult generateOrder(@RequestBody OrderParam orderParam,
+                                      @Parameter(description = "下单幂等令牌，由 GET /order/token 获取")
+                                      @RequestHeader(value = "X-Order-Token", required = false) String orderToken) {
+        Map<String, Object> result = portalOrderService.generateOrder(orderParam, orderToken);
         return CommonResult.success(result, "下单成功");
     }
 

@@ -9,6 +9,7 @@ import com.macro.mall.common.service.RedisService;
 import com.macro.mall.mapper.*;
 import com.macro.mall.model.*;
 import com.macro.mall.portal.component.CancelOrderSender;
+import com.macro.mall.portal.component.OrderIdempotentSupport;
 import com.macro.mall.portal.dao.PortalOrderDao;
 import com.macro.mall.portal.dao.PortalOrderItemDao;
 import com.macro.mall.portal.dao.SmsCouponHistoryDao;
@@ -53,6 +54,8 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
     private SmsCouponHistoryMapper couponHistoryMapper;
     @Autowired
     private RedisService redisService;
+    @Autowired
+    private OrderIdempotentSupport idempotentSupport;
     @Value("${redis.key.orderId}")
     private String REDIS_KEY_ORDER_ID;
     @Value("${redis.database}")
@@ -91,15 +94,30 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
     }
 
     @Override
-    public Map<String, Object> generateOrder(OrderParam orderParam) {
+    public String generateOrderToken() {
+        // 令牌与当前会员绑定，避免令牌被他人复用
+        UmsMember currentMember = memberService.getCurrentMember();
+        return idempotentSupport.generateToken(currentMember.getId());
+    }
+
+    @Override
+    public Map<String, Object> generateOrder(OrderParam orderParam, String orderToken) {
+        UmsMember currentMember = memberService.getCurrentMember();
+        // 幂等校验必须放在最前面：令牌一次性消费，重复提交在这里就被拦住，
+        // 不会走到后面的库存锁定和订单落库
+        idempotentSupport.consume(currentMember.getId(), orderToken);
         List<OmsOrderItem> orderItemList = new ArrayList<>();
         //校验收货地址
         if(orderParam.getMemberReceiveAddressId()==null){
             Asserts.fail("请选择收货地址！");
         }
         //获取购物车及优惠信息
-        UmsMember currentMember = memberService.getCurrentMember();
         List<CartPromotionItem> cartPromotionItemList = cartItemService.listPromotion(currentMember.getId(), orderParam.getCartIds());
+        // 购物车为空必须尽早拦截：否则会走到批量插入 0 条订单明细，
+        // 触发 "insert ... values" 的 SQL 语法错误，最终对外暴露成"系统繁忙"
+        if (CollectionUtils.isEmpty(cartPromotionItemList)) {
+            Asserts.fail("购物车中没有可下单的商品，请返回购物车重新选择");
+        }
         for (CartPromotionItem cartPromotionItem : cartPromotionItemList) {
             //生成下单商品信息
             OmsOrderItem orderItem = new OmsOrderItem();
@@ -449,8 +467,11 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
         String key = REDIS_DATABASE+":"+ REDIS_KEY_ORDER_ID + date;
         Long increment = redisService.incr(key, 1);
         sb.append(date);
-        sb.append(String.format("%02d", order.getSourceType()));
-        sb.append(String.format("%02d", order.getPayType()));
+        // sourceType / payType 可能为 null（下单时未指定支付方式），
+        // String.format("%02d", null) 会输出字面量 "null"，把 18 位单号撑成 20 位，
+        // 影响对账与按单号检索，这里统一兜底成 00
+        sb.append(String.format("%02d", order.getSourceType() == null ? 0 : order.getSourceType()));
+        sb.append(String.format("%02d", order.getPayType() == null ? 0 : order.getPayType()));
         String incrementStr = increment.toString();
         if (incrementStr.length() <= 6) {
             sb.append(String.format("%06d", increment));
@@ -731,11 +752,23 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
     /**
      * 锁定下单商品的所有库存
      */
+    /**
+     * 锁定库存（并发安全）
+     * <p>
+     * 改造前是「查出来 + quantity 再 updateByPrimaryKeySelective」的读-改-写，
+     * 两个线程同时下单会读到同一个旧值，各自 +1 写回，结果只锁了 1 件但生成 2 张单 —— 典型超卖。
+     * <p>
+     * 改造后交给一条带条件的 UPDATE：{@code ... WHERE stock - lock_stock >= quantity}，
+     * 判断与累加在数据库内原子完成。影响行数为 0 说明可售库存已被别的请求抢走，
+     * 这里抛异常触发整个 {@code @Transactional} 回滚，前面已锁定的其它 SKU 也会一并回滚。
+     */
     private void lockStock(List<CartPromotionItem> cartPromotionItemList) {
         for (CartPromotionItem cartPromotionItem : cartPromotionItemList) {
-            PmsSkuStock skuStock = skuStockMapper.selectByPrimaryKey(cartPromotionItem.getProductSkuId());
-            skuStock.setLockStock(skuStock.getLockStock() + cartPromotionItem.getQuantity());
-            skuStockMapper.updateByPrimaryKeySelective(skuStock);
+            int rows = portalOrderDao.lockSkuStock(cartPromotionItem.getProductSkuId(), cartPromotionItem.getQuantity());
+            if (rows == 0) {
+                // 用商品名提示，前端可直接展示给用户
+                Asserts.fail("商品「" + cartPromotionItem.getProductName() + "」库存不足，请调整数量后重试");
+            }
         }
     }
 

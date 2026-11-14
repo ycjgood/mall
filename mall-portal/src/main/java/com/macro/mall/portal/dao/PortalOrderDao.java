@@ -37,4 +37,18 @@ public interface PortalOrderDao {
      */
     int releaseSkuStockLock(@Param("itemList") List<OmsOrderItem> orderItemList);
 
+    /**
+     * 原子锁定单个 SKU 的库存
+     * <p>
+     * SQL 语义：{@code UPDATE pms_sku_stock SET lock_stock = lock_stock + #{quantity}
+     * WHERE id = #{skuId} AND stock - lock_stock >= #{quantity}}
+     * <p>
+     * 把「判断可售库存是否足够」和「累加锁定库存」压进一条 UPDATE，
+     * 由 InnoDB 行锁保证并发下的原子性：抢不到库存的请求影响行数为 0，
+     * 调用方据此抛异常回滚整个下单事务，从根上避免超卖。
+     *
+     * @return 影响行数，0 表示库存不足
+     */
+    int lockSkuStock(@Param("skuId") Long skuId, @Param("quantity") Integer quantity);
+
 }

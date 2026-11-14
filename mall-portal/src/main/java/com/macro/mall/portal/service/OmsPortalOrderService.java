@@ -21,10 +21,21 @@ public interface OmsPortalOrderService {
     ConfirmOrderResult generateConfirmOrder(List<Long> cartIds);
 
     /**
+     * 生成下单幂等令牌
+     * <p>
+     * 前端在进入结算页时调用一次，提交订单时把令牌放到请求头 X-Order-Token。
+     * 令牌一次性有效（10 分钟），重复提交会被服务端拒绝。
+     */
+    String generateOrderToken();
+
+    /**
      * 根据提交信息生成订单
+     *
+     * @param orderParam 下单参数
+     * @param orderToken 幂等令牌，必须与当前会员匹配且未使用过
      */
     @Transactional
-    Map<String, Object> generateOrder(OrderParam orderParam);
+    Map<String, Object> generateOrder(OrderParam orderParam, String orderToken);
 
     /**
      * 支付成功后的回调
