@@ -11,6 +11,7 @@ import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.core.annotation.Order;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -30,10 +31,14 @@ import java.util.Collections;
  *     <li><b>故障降级（fail-open）</b>：Redis 挂了只记录日志并放行，限流组件不能成为业务的新单点</li>
  *     <li><b>返回剩余时间</b>：把 TTL 返回给调用方，前端可据此提示"X 秒后重试"</li>
  * </ol>
+ * <p>
+ * 条件装配：mall-search 等模块在 pom 中排除了 spring-boot-starter-data-redis，
+ * 若不加此条件，@Aspect 被扫描时字节码解析会触发 NoClassDefFoundError: RedisScript。
  */
 @Aspect
 @Component
 @Order(2)
+@ConditionalOnClass(StringRedisTemplate.class)
 public class RateLimitAspect {
     private static final Logger LOGGER = LoggerFactory.getLogger(RateLimitAspect.class);
     /**

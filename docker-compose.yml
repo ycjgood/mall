@@ -65,13 +65,15 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-mall}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-mall}
+      # 必须与 mall-portal 的 spring.rabbitmq.virtual-host 一致，否则报 no vhost /mall
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/mall}
       TZ: Asia/Shanghai
     volumes:
       - mall-rabbitmq-data:/var/lib/rabbitmq
 
   mongo:
     profiles: ["mongo"]
-    image: mongo:5
+    image: mongo:7
     container_name: mall-mongo
     restart: unless-stopped
     ports:
@@ -81,7 +83,13 @@ services:
 
   elasticsearch:
     profiles: ["search"]
-    image: elasticsearch:7.17.10
+    # 必须是 8.x：mall-search 依赖 elasticsearch-java 8.18.8（Spring Data ES 5.5.11），
+    # 7.x 服务端与该客户端 API 不兼容，会导致搜索模块启动或查询失败。
+    # 镜像内置 IK 中文分词插件（deploy/es/Dockerfile 构建），否则 EsProduct 的
+    # ik_max_word analyzer 会报 mapper_parsing_exception。
+    build:
+      context: ./deploy/es
+    image: mall-elasticsearch:8.18.8-ik
     container_name: mall-es
     restart: unless-stopped
     ports:
@@ -89,10 +97,15 @@ services:
     environment:
       discovery.type: single-node
       ES_JAVA_OPTS: -Xms512m -Xmx512m
-      xpack.security.enabled: "false"
+      xpack.security.enabled: "false"          # 本地开发关闭鉴权，免证书
+      xpack.security.enrollment.enabled: "false"
+      cluster.name: mall-es
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
     volumes:
       - mall-es-data:/usr/share/elasticsearch/data
-    # 虚拟机 8G 内存，ES 已限制 512m 堆，仍建议单独启动而非长期常驻
+    # 前置条件：宿主机 sysctl vm.max_map_count >= 262144，否则容器启动即退出
+    # 虚拟机 8G 内存，ES 已限制 512m 堆，仍建议按需启动而非长期常驻
 
   minio:
     profiles: ["minio"]

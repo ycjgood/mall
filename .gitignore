@@ -14,3 +14,6 @@ target/
 .env
 *.local.yml
 logs/
+
+# ES IK 插件包（4.5MB 二进制，不入库，见 deploy/es/Dockerfile 注释）
+deploy/es/*.zip

@@ -17,7 +17,7 @@ spring:
       repositories:
         enabled: true
   elasticsearch:
-    uris: localhost:9200
+    uris: 192.168.150.101:9200 # Elasticsearch 8.x（虚拟机）
 
 logging:
   level:

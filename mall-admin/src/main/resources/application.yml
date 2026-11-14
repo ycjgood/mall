@@ -11,6 +11,11 @@ spring:
     pathmatch:
       matching-strategy: ant_path_matcher
 
+server:
+  tomcat:
+    mbeanregistry:
+      enabled: true # Spring Boot 3 默认关闭 Tomcat MBean，不开此项 Grafana 里没有线程池指标
+
 mybatis:
   mapper-locations:
     - classpath:dao/*.xml
