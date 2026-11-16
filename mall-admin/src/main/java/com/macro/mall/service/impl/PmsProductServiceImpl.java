@@ -3,6 +3,7 @@ package com.macro.mall.service.impl;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import com.github.pagehelper.PageHelper;
+import com.macro.mall.component.ProductSyncSender;
 import com.macro.mall.dao.*;
 import com.macro.mall.dto.PmsProductParam;
 import com.macro.mall.dto.PmsProductQueryParam;
@@ -19,6 +20,7 @@ import org.springframework.util.CollectionUtils;
 import java.lang.reflect.Method;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -64,6 +66,8 @@ public class PmsProductServiceImpl implements PmsProductService {
     private PmsProductDao productDao;
     @Autowired
     private PmsProductVertifyRecordDao productVertifyRecordDao;
+    @Autowired
+    private ProductSyncSender productSyncSender;
 
     @Override
     public int create(PmsProductParam productParam) {
@@ -91,6 +95,7 @@ public class PmsProductServiceImpl implements PmsProductService {
         //关联优选
         relateAndInsertList(prefrenceAreaProductRelationDao, productParam.getPrefrenceAreaProductRelationList(), productId);
         count = 1;
+        productSyncSender.syncAfterCommit(Collections.singletonList(productId), "create");
         return count;
     }
 
@@ -157,6 +162,7 @@ public class PmsProductServiceImpl implements PmsProductService {
         prefrenceAreaProductRelationMapper.deleteByExample(prefrenceAreaExample);
         relateAndInsertList(prefrenceAreaProductRelationDao, productParam.getPrefrenceAreaProductRelationList(), id);
         count = 1;
+        productSyncSender.syncAfterCommit(Collections.singletonList(id), "update");
         return count;
     }
 
@@ -249,6 +255,8 @@ public class PmsProductServiceImpl implements PmsProductService {
             list.add(record);
         }
         productVertifyRecordDao.insertList(list);
+        // 审核状态本身不影响索引内容，但通过审核往往紧接着上架，提前同步成本很低
+        productSyncSender.syncAfterCommit(ids, "verify");
         return count;
     }
 
@@ -258,7 +266,10 @@ public class PmsProductServiceImpl implements PmsProductService {
         record.setPublishStatus(publishStatus);
         PmsProductExample example = new PmsProductExample();
         example.createCriteria().andIdIn(ids);
-        return productMapper.updateByExampleSelective(record, example);
+        int count = productMapper.updateByExampleSelective(record, example);
+        // 上架/下架直接决定文档是否存在于索引中
+        productSyncSender.syncAfterCommit(ids, "publish");
+        return count;
     }
 
     @Override
@@ -267,7 +278,10 @@ public class PmsProductServiceImpl implements PmsProductService {
         record.setRecommandStatus(recommendStatus);
         PmsProductExample example = new PmsProductExample();
         example.createCriteria().andIdIn(ids);
-        return productMapper.updateByExampleSelective(record, example);
+        int count = productMapper.updateByExampleSelective(record, example);
+        // 推荐状态是 ES 文档字段，影响「推荐商品」检索
+        productSyncSender.syncAfterCommit(ids, "recommend");
+        return count;
     }
 
     @Override
@@ -276,7 +290,10 @@ public class PmsProductServiceImpl implements PmsProductService {
         record.setNewStatus(newStatus);
         PmsProductExample example = new PmsProductExample();
         example.createCriteria().andIdIn(ids);
-        return productMapper.updateByExampleSelective(record, example);
+        int count = productMapper.updateByExampleSelective(record, example);
+        // 新品标记是 ES 文档字段，影响「按新品排序」
+        productSyncSender.syncAfterCommit(ids, "new");
+        return count;
     }
 
     @Override
@@ -285,7 +302,10 @@ public class PmsProductServiceImpl implements PmsProductService {
         record.setDeleteStatus(deleteStatus);
         PmsProductExample example = new PmsProductExample();
         example.createCriteria().andIdIn(ids);
-        return productMapper.updateByExampleSelective(record, example);
+        int count = productMapper.updateByExampleSelective(record, example);
+        // 逻辑删除后查询 SQL 查不到该商品，消费端会据此把文档移出索引
+        productSyncSender.syncAfterCommit(ids, "delete");
+        return count;
     }
 
     @Override

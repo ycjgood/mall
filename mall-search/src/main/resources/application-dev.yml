@@ -18,6 +18,17 @@ spring:
         enabled: true
   elasticsearch:
     uris: 192.168.150.101:9200 # Elasticsearch 8.x（虚拟机）
+  rabbitmq:
+    host: 192.168.150.101 # RabbitMQ（虚拟机）
+    port: 5672
+    virtual-host: /mall
+    username: mall
+    password: mall
+    listener:
+      simple:
+        # 消费端已自行 catch 全部异常；这里再关掉自动重入队，
+        # 防止消息体无法反序列化时（MessageConversionException 在进入方法前抛出）无限重投
+        default-requeue-rejected: false
 
 logging:
   level:

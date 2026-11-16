@@ -84,6 +84,43 @@ public class EsProductServiceImpl implements EsProductService {
     }
 
     @Override
+    public boolean sync(Long id) {
+        if (id == null) {
+            return false;
+        }
+        // getAllEsProductList 的 SQL 带 delete_status=0 and publish_status=1 过滤：
+        // 查得到说明商品在架，写索引；查不到说明已下架/已删除，必须把文档摘掉，
+        // 否则用户还能在搜索结果里点进一个已经不卖的商品。
+        List<EsProduct> esProductList = productDao.getAllEsProductList(id);
+        if (!CollectionUtils.isEmpty(esProductList)) {
+            productRepository.save(esProductList.get(0));
+            return true;
+        }
+        productRepository.deleteById(id);
+        return false;
+    }
+
+    @Override
+    public int sync(List<Long> ids) {
+        if (CollectionUtils.isEmpty(ids)) {
+            return 0;
+        }
+        int count = 0;
+        for (Long id : ids) {
+            try {
+                if (sync(id)) {
+                    count++;
+                }
+            } catch (Exception e) {
+                // 一件商品同步失败不应影响同批其它商品；该商品的索引会滞后到下次变更或全量重建
+                LOGGER.error("sync es product failed, id:{}", id, e);
+            }
+        }
+        LOGGER.info("sync es product done, total:{}, indexed:{}", ids.size(), count);
+        return count;
+    }
+
+    @Override
     public Page<EsProduct> search(String keyword, Integer pageNum, Integer pageSize) {
         Pageable pageable = PageRequest.of(pageNum, pageSize);
         return productRepository.findByNameOrSubTitleOrKeywords(keyword, keyword, keyword, pageable);
