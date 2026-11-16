@@ -89,6 +89,17 @@
         </foreach>
     </update>
     <!--
+      幂等关闭未支付订单：状态判断与修改在同一条 UPDATE 内完成。
+      影响行数为 1 才表示「本次调用真的关掉了这个订单」，调用方据此决定是否执行
+      库存回滚、Redis 计数回补、优惠券与积分返还，重复消息不会二次释放。
+    -->
+    <update id="closeUnpaidOrder">
+        UPDATE oms_order
+        SET status = 4
+        WHERE id = #{orderId}
+          AND status = 0
+    </update>
+    <!--
       原子锁定库存：判断与累加在同一条 UPDATE 内完成，依赖 InnoDB 行锁保证并发安全。
       stock - lock_stock 即可售库存；影响行数为 0 表示库存不足（并发下被别的请求抢走）。
     -->

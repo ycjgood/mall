@@ -308,7 +308,9 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
         //删除购物车中的下单商品
         deleteCartItemList(cartPromotionItemList, currentMember);
         //发送延迟消息取消订单
-        sendDelayMessageCancelOrder(order.getId());
+        //关键：必须等事务提交后再发，否则消费端可能先于提交读到订单（读不到就静默跳过），
+        //或者事务回滚后消息仍然把一笔不存在的订单发出去
+        sendDelayMessageAfterCommit(order.getId());
         Map<String, Object> result = new HashMap<>();
         result.put("order", order);
         result.put("orderItemList", orderItemList);
@@ -339,13 +341,13 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
         if (CollectionUtils.isEmpty(timeOutOrders)) {
             return count;
         }
-        //修改订单状态为交易取消
-        List<Long> ids = new ArrayList<>();
         for (OmsOrderDetail timeOutOrder : timeOutOrders) {
-            ids.add(timeOutOrder.getId());
-        }
-        portalOrderDao.updateOrderStatus(ids, 4);
-        for (OmsOrderDetail timeOutOrder : timeOutOrders) {
+            // 与消息消费走同一条幂等路径：只有真正把状态从 0 改成 4 的那一方才做后续释放，
+            // 避免「扫描任务」和「延迟消息」同时处理同一笔订单导致库存重复回补
+            if (portalOrderDao.closeUnpaidOrder(timeOutOrder.getId()) == 0) {
+                LOGGER.info("timeout skip orderId:{}, 订单已被其它路径关闭", timeOutOrder.getId());
+                continue;
+            }
             //解除订单商品库存锁定
             portalOrderDao.releaseSkuStockLock(timeOutOrder.getOrderItemList());
             // 同步回补 Redis 预扣计数，否则超时单会把 Redis 可售数量越吃越少
@@ -357,40 +359,77 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
                 UmsMember member = memberService.getById(timeOutOrder.getMemberId());
                 memberService.updateIntegration(timeOutOrder.getMemberId(), member.getIntegration() + timeOutOrder.getUseIntegration());
             }
+            count++;
         }
-        return timeOutOrders.size();
+        return count;
     }
 
     @Override
     public void cancelOrder(Long orderId) {
-        //查询未付款的取消订单
-        OmsOrderExample example = new OmsOrderExample();
-        example.createCriteria().andIdEqualTo(orderId).andStatusEqualTo(0).andDeleteStatusEqualTo(0);
-        List<OmsOrder> cancelOrderList = orderMapper.selectByExample(example);
-        if (CollectionUtils.isEmpty(cancelOrderList)) {
+        // 幂等入口：延迟消息可能重复投递，这里用条件更新抢占「关闭订单」的资格，
+        // 只有返回 1 的调用才继续做库存回滚等副作用，重复消息拿到 0 直接返回
+        if (portalOrderDao.closeUnpaidOrder(orderId) == 0) {
+            LOGGER.info("cancel skip orderId:{}, 订单不存在或已非待付款状态", orderId);
             return;
         }
-        OmsOrder cancelOrder = cancelOrderList.get(0);
-        if (cancelOrder != null) {
-            //修改订单状态为取消
-            cancelOrder.setStatus(4);
-            orderMapper.updateByPrimaryKeySelective(cancelOrder);
-            OmsOrderItemExample orderItemExample = new OmsOrderItemExample();
-            orderItemExample.createCriteria().andOrderIdEqualTo(orderId);
-            List<OmsOrderItem> orderItemList = orderItemMapper.selectByExample(orderItemExample);
-            //解除订单商品库存锁定
-            if (!CollectionUtils.isEmpty(orderItemList)) {
-                portalOrderDao.releaseSkuStockLock(orderItemList);
-                // 同步回补 Redis 预扣计数
-                restoreRedisForOrderItems(orderItemList);
-            }
-            //修改优惠券使用状态
-            updateCouponStatus(cancelOrder.getCouponId(), cancelOrder.getMemberId(), 0);
-            //返还使用积分
-            if (cancelOrder.getUseIntegration() != null) {
-                UmsMember member = memberService.getById(cancelOrder.getMemberId());
-                memberService.updateIntegration(cancelOrder.getMemberId(), member.getIntegration() + cancelOrder.getUseIntegration());
-            }
+        OmsOrder cancelOrder = orderMapper.selectByPrimaryKey(orderId);
+        if (cancelOrder == null) {
+            return;
+        }
+        OmsOrderItemExample orderItemExample = new OmsOrderItemExample();
+        orderItemExample.createCriteria().andOrderIdEqualTo(orderId);
+        List<OmsOrderItem> orderItemList = orderItemMapper.selectByExample(orderItemExample);
+        //解除订单商品库存锁定
+        if (!CollectionUtils.isEmpty(orderItemList)) {
+            portalOrderDao.releaseSkuStockLock(orderItemList);
+            // 同步回补 Redis 预扣计数
+            restoreRedisForOrderItems(orderItemList);
+        }
+        //修改优惠券使用状态
+        updateCouponStatus(cancelOrder.getCouponId(), cancelOrder.getMemberId(), 0);
+        //返还使用积分
+        if (cancelOrder.getUseIntegration() != null) {
+            UmsMember member = memberService.getById(cancelOrder.getMemberId());
+            memberService.updateIntegration(cancelOrder.getMemberId(), member.getIntegration() + cancelOrder.getUseIntegration());
+        }
+    }
+
+    /**
+     * 在事务提交之后再发送延迟取消消息。
+     * <p>
+     * 直接在事务方法里发消息有两个问题：
+     * <ol>
+     *   <li>消息可能先于事务提交到达消费者，消费者按 orderId 查不到订单（或查不到 status=0），
+     *       这笔订单就永远不会被消息取消；</li>
+     *   <li>事务回滚后消息已经发出去了，等于为一笔不存在的订单安排取消。</li>
+     * </ol>
+     * 用 TransactionSynchronization 把发送挂到 afterCommit，事务成功提交才发送；
+     * 回滚时 afterCommit 不会执行，消息自然不会被发出去。
+     */
+    private void sendDelayMessageAfterCommit(Long orderId) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    dispatchDelayMessage(orderId);
+                }
+            });
+        } else {
+            dispatchDelayMessage(orderId);
+        }
+    }
+
+    /**
+     * 真正的发送动作，异常只记日志不外抛。
+     * <p>
+     * 消息中间件不可用不应该影响已经提交的订单；就算这条消息彻底丢了，
+     * OrderTimeOutCancelTask 每 10 分钟扫一次超时未支付订单，最终仍会关闭它。
+     */
+    private void dispatchDelayMessage(Long orderId) {
+        try {
+            sendDelayMessageCancelOrder(orderId);
+        } catch (Exception e) {
+            LOGGER.warn("延迟取消消息发送失败，orderId:{}，将由超时扫描任务兜底", orderId, e);
         }
     }
 

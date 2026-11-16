@@ -38,6 +38,20 @@ public interface PortalOrderDao {
     int releaseSkuStockLock(@Param("itemList") List<OmsOrderItem> orderItemList);
 
     /**
+     * 关闭未支付订单（条件更新，幂等）
+     * <p>
+     * SQL 语义：{@code UPDATE oms_order SET status = 4 WHERE id = #{orderId} AND status = 0}
+     * <p>
+     * 把「订单当前仍是待付款」的判断和状态修改压进一条 UPDATE，由 InnoDB 行锁保证原子性。
+     * 延迟消息可能重复投递，定时扫描任务也可能与消息消费并发取消同一订单，
+     * 只有真正把状态从 0 改成 4 的那一次调用返回 1，后续重复调用返回 0，
+     * 调用方据此跳过库存回滚/优惠券返还等副作用，避免重复释放。
+     *
+     * @return 影响行数，0 表示订单不存在或已被取消/支付
+     */
+    int closeUnpaidOrder(@Param("orderId") Long orderId);
+
+    /**
      * 原子锁定单个 SKU 的库存
      * <p>
      * SQL 语义：{@code UPDATE pms_sku_stock SET lock_stock = lock_stock + #{quantity}
