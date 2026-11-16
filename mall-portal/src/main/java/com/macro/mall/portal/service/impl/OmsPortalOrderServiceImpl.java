@@ -6,6 +6,7 @@ import com.github.pagehelper.PageHelper;
 import com.macro.mall.common.api.CommonPage;
 import com.macro.mall.common.exception.Asserts;
 import com.macro.mall.common.service.RedisService;
+import com.macro.mall.common.stock.RedisStockSupport;
 import com.macro.mall.mapper.*;
 import com.macro.mall.model.*;
 import com.macro.mall.portal.component.CancelOrderSender;
@@ -15,9 +16,13 @@ import com.macro.mall.portal.dao.PortalOrderItemDao;
 import com.macro.mall.portal.dao.SmsCouponHistoryDao;
 import com.macro.mall.portal.domain.*;
 import com.macro.mall.portal.service.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
@@ -32,6 +37,8 @@ import java.util.stream.Collectors;
  */
 @Service
 public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
+    private static final Logger LOGGER = LoggerFactory.getLogger(OmsPortalOrderServiceImpl.class);
+
     @Autowired
     private UmsMemberService memberService;
     @Autowired
@@ -83,6 +90,20 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
     @Value("${mall.order.idempotent-enabled:true}")
     private boolean idempotentEnabled;
 
+    /**
+     * 库存扣减模式：db=只用数据库条件原子更新（默认，通用场景）；redis=先用 Redis 预扣拦截（秒杀场景）
+     */
+    private static final String REDIS_DEDUCT = "redis";
+
+    @Value("${mall.order.stock-deduct-mode:db}")
+    private String stockDeductMode;
+
+    @Autowired
+    private RedisStockSupport redisStockSupport;
+
+    @Autowired
+    private OmsCartItemMapper cartItemMapper;
+
     @Override
     public ConfirmOrderResult generateConfirmOrder(List<Long> cartIds) {
         ConfirmOrderResult result = new ConfirmOrderResult();
@@ -115,6 +136,15 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
     }
 
     @Override
+    public void precheckStock(OrderParam orderParam) {
+        if (!REDIS_DEDUCT.equals(stockDeductMode)) {
+            return;
+        }
+        UmsMember currentMember = memberService.getCurrentMember();
+        fastFailOnSoldOut(currentMember.getId(), orderParam.getCartIds());
+    }
+
+    @Override
     public Map<String, Object> generateOrder(OrderParam orderParam, String orderToken) {
         UmsMember currentMember = memberService.getCurrentMember();
         // 幂等校验必须放在最前面：令牌一次性消费，重复提交在这里就被拦住，
@@ -127,6 +157,8 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
         if(orderParam.getMemberReceiveAddressId()==null){
             Asserts.fail("请选择收货地址！");
         }
+        // 库存快速失败已在 Controller 调用的 precheckStock 里完成（事务之外），
+        // 这里不再重复查询，直接进入正式下单流程
         //获取购物车及优惠信息
         List<CartPromotionItem> cartPromotionItemList = cartItemService.listPromotion(currentMember.getId(), orderParam.getCartIds());
         // 购物车为空必须尽早拦截：否则会走到批量插入 0 条订单明细，
@@ -316,6 +348,8 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
         for (OmsOrderDetail timeOutOrder : timeOutOrders) {
             //解除订单商品库存锁定
             portalOrderDao.releaseSkuStockLock(timeOutOrder.getOrderItemList());
+            // 同步回补 Redis 预扣计数，否则超时单会把 Redis 可售数量越吃越少
+            restoreRedisForOrderItems(timeOutOrder.getOrderItemList());
             //修改优惠券使用状态
             updateCouponStatus(timeOutOrder.getCouponId(), timeOutOrder.getMemberId(), 0);
             //返还使用积分
@@ -347,6 +381,8 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
             //解除订单商品库存锁定
             if (!CollectionUtils.isEmpty(orderItemList)) {
                 portalOrderDao.releaseSkuStockLock(orderItemList);
+                // 同步回补 Redis 预扣计数
+                restoreRedisForOrderItems(orderItemList);
             }
             //修改优惠券使用状态
             updateCouponStatus(cancelOrder.getCouponId(), cancelOrder.getMemberId(), 0);
@@ -783,11 +819,121 @@ public class OmsPortalOrderServiceImpl implements OmsPortalOrderService {
             lockStockLegacy(cartPromotionItemList);
             return;
         }
+        // 第一道闸门：Redis 预扣。秒杀场景下绝大多数请求在这里就被拒，一次数据库访问都不会产生
+        if (REDIS_DEDUCT.equals(stockDeductMode)) {
+            deductStockInRedis(cartPromotionItemList);
+        }
+        // 第二道闸门：数据库条件原子更新。Redis 只决定"放不放行"，数据库才是权威账本，
+        // 同时兜住"未预热 / Redis 故障"的降级场景
         for (CartPromotionItem cartPromotionItem : cartPromotionItemList) {
             int rows = portalOrderDao.lockSkuStock(cartPromotionItem.getProductSkuId(), cartPromotionItem.getQuantity());
             if (rows == 0) {
                 // 用商品名提示，前端可直接展示给用户
                 Asserts.fail("商品「" + cartPromotionItem.getProductName() + "」库存不足，请调整数量后重试");
+            }
+        }
+    }
+
+    /**
+     * 下单入口的快速失败：库存明显不足时立刻返回
+     * <p>
+     * 只查购物车（一条 SQL）比对 Redis 计数，不扣减、不加锁。
+     * 原因：真正扣减在 {@link #deductStockInRedis} 里做，如果这里也扣，
+     * 一旦后续促销计算过滤掉部分商品就会多扣，回滚逻辑会变得复杂。
+     * 这里只负责把"注定失败"的请求尽早挡掉，正确性仍由原子扣减保证。
+     */
+    private void fastFailOnSoldOut(Long memberId, List<Long> cartIds) {
+        if (CollectionUtils.isEmpty(cartIds)) {
+            return;
+        }
+        OmsCartItemExample example = new OmsCartItemExample();
+        example.createCriteria()
+                .andMemberIdEqualTo(memberId)
+                .andDeleteStatusEqualTo(0)
+                .andIdIn(cartIds);
+        List<OmsCartItem> cartItems = cartItemMapper.selectByExample(example);
+        for (OmsCartItem cartItem : cartItems) {
+            if (!redisStockSupport.isAvailable(cartItem.getProductSkuId(), cartItem.getQuantity())) {
+                Asserts.fail("商品「" + cartItem.getProductName() + "」库存不足，请调整数量后重试");
+            }
+        }
+    }
+
+    /**
+     * Redis 预扣：逐个 SKU 原子扣减，任一失败则回滚本次已扣部分并终止
+     * <p>
+     * 为什么不先扣一部分就落库：多 SKU 订单必须"全部预留成功"才继续，
+     * 否则会出现 A 商品扣了、B 商品不足导致整单失败，A 的额度被白白占住。
+     */
+    private void deductStockInRedis(List<CartPromotionItem> cartPromotionItemList) {
+        List<CartPromotionItem> deducted = new ArrayList<>();
+        for (CartPromotionItem cartPromotionItem : cartPromotionItemList) {
+            RedisStockSupport.DeductResult result =
+                    redisStockSupport.tryDeduct(cartPromotionItem.getProductSkuId(), cartPromotionItem.getQuantity());
+            if (result == RedisStockSupport.DeductResult.SUCCESS) {
+                deducted.add(cartPromotionItem);
+                continue;
+            }
+            // 无论"库存不足"还是"未预热"，本次已扣的都要还回去
+            restoreRedisForCartItems(deducted);
+            if (result == RedisStockSupport.DeductResult.INSUFFICIENT) {
+                Asserts.fail("商品「" + cartPromotionItem.getProductName() + "」库存不足，请调整数量后重试");
+            }
+            // NOT_PREHEATED：不阻断业务，整体降级为纯数据库扣减
+            LOGGER.info("[库存预扣降级] skuId={} 未预热或 Redis 异常，本次下单改走数据库",
+                    cartPromotionItem.getProductSkuId());
+            return;
+        }
+        if (!deducted.isEmpty()) {
+            registerRedisRollbackCompensation(deducted);
+        }
+    }
+
+    /**
+     * 注册事务回滚补偿：Redis 扣减成功后，只要数据库事务没提交成功，就自动把额度还回去
+     * <p>
+     * 之所以用 {@link TransactionSynchronization} 而不是在 catch 里手动回补：
+     * 下单流程后面还有订单落库、明细插入、购物车删除、MQ 发送等多处可能抛异常，
+     * 只有事务层面的钩子能覆盖"所有"回滚路径，不会漏。
+     */
+    private void registerRedisRollbackCompensation(List<CartPromotionItem> deducted) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            // 理论上不会发生（generateOrder 带 @Transactional），保守起见不注册
+            LOGGER.warn("[库存预扣] 当前无事务上下文，跳过回滚补偿注册");
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status != STATUS_COMMITTED) {
+                    restoreRedisForCartItems(deducted);
+                }
+            }
+        });
+    }
+
+    /**
+     * 回补 Redis 库存（购物车条目）
+     */
+    private void restoreRedisForCartItems(List<CartPromotionItem> items) {
+        if (!REDIS_DEDUCT.equals(stockDeductMode) || CollectionUtils.isEmpty(items)) {
+            return;
+        }
+        for (CartPromotionItem item : items) {
+            redisStockSupport.restore(item.getProductSkuId(), item.getQuantity());
+        }
+    }
+
+    /**
+     * 回补 Redis 库存（订单明细，用于取消订单 / 超时关单）
+     */
+    private void restoreRedisForOrderItems(List<OmsOrderItem> items) {
+        if (!REDIS_DEDUCT.equals(stockDeductMode) || CollectionUtils.isEmpty(items)) {
+            return;
+        }
+        for (OmsOrderItem item : items) {
+            if (item.getProductQuantity() != null) {
+                redisStockSupport.restore(item.getProductSkuId(), item.getProductQuantity());
             }
         }
     }

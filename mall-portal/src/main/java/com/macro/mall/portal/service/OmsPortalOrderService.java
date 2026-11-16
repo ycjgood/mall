@@ -38,6 +38,17 @@ public interface OmsPortalOrderService {
     Map<String, Object> generateOrder(OrderParam orderParam, String orderToken);
 
     /**
+     * 下单前置预检（<b>故意不加 @Transactional</b>）
+     * <p>
+     * 放在事务之外执行，这样"库存不足"的请求连事务都不会开启，
+     * 数据库侧不产生任何事务开销（Com_begin / Com_rollback）。
+     * 只对 Redis 预扣模式生效，其他模式直接返回。
+     *
+     * @throws com.macro.mall.common.exception.ApiException 库存明显不足时抛出
+     */
+    void precheckStock(OrderParam orderParam);
+
+    /**
      * 支付成功后的回调
      */
     @Transactional

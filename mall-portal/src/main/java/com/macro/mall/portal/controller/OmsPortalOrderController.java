@@ -53,6 +53,8 @@ public class OmsPortalOrderController {
     public CommonResult generateOrder(@RequestBody OrderParam orderParam,
                                       @Parameter(description = "下单幂等令牌，由 GET /order/token 获取")
                                       @RequestHeader(value = "X-Order-Token", required = false) String orderToken) {
+        // 事务外预检：库存明显不足时在这里就返回，不开启数据库事务
+        portalOrderService.precheckStock(orderParam);
         Map<String, Object> result = portalOrderService.generateOrder(orderParam, orderToken);
         return CommonResult.success(result, "下单成功");
     }

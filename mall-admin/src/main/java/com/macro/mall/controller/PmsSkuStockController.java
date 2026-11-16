@@ -40,4 +40,11 @@ public class PmsSkuStockController {
             return CommonResult.failed();
         }
     }
+
+    @Operation(summary = "把可售库存预热到 Redis（秒杀/大促前必做，Redis 重启后也用它恢复）")
+    @RequestMapping(value = "/preheat", method = RequestMethod.POST)
+    @ResponseBody
+    public CommonResult<Integer> preheat(@RequestParam(value = "overwrite", defaultValue = "false") boolean overwrite) {
+        return CommonResult.success(skuStockService.preheatToRedis(overwrite));
+    }
 }
