@@ -46,6 +46,12 @@ public class OmsPromotionServiceImpl implements OmsPromotionService {
                     cartPromotionItem.setPromotionMessage("单品促销");
                     //商品原价-促销价
                     PmsSkuStock skuStock = getOriginalPrice(promotionProduct, item.getProductSkuId());
+                    if (skuStock == null) {
+                        // SKU 与商品不匹配（脏数据/异常请求）：降级用加购快照价，避免 NPE 打挂确认单
+                        fillFallbackPromotionItem(cartPromotionItem, promotionProduct, item);
+                        cartPromotionItemList.add(cartPromotionItem);
+                        continue;
+                    }
                     BigDecimal originalPrice = skuStock.getPrice();
                     //单品促销使用原价
                     cartPromotionItem.setPrice(originalPrice);
@@ -67,6 +73,12 @@ public class OmsPromotionServiceImpl implements OmsPromotionService {
                         cartPromotionItem.setPromotionMessage(message);
                         //商品原价-折扣*商品原价
                         PmsSkuStock skuStock = getOriginalPrice(promotionProduct,item.getProductSkuId());
+                        if (skuStock == null) {
+                            // SKU 与商品不匹配（脏数据/异常请求）：降级用加购快照价，避免 NPE
+                            fillFallbackPromotionItem(cartPromotionItem, promotionProduct, item);
+                            cartPromotionItemList.add(cartPromotionItem);
+                            continue;
+                        }
                         BigDecimal originalPrice = skuStock.getPrice();
                         BigDecimal reduceAmount = originalPrice.subtract(ladder.getDiscount().multiply(originalPrice));
                         cartPromotionItem.setReduceAmount(reduceAmount);
@@ -90,6 +102,12 @@ public class OmsPromotionServiceImpl implements OmsPromotionService {
                         cartPromotionItem.setPromotionMessage(message);
                         //(商品原价/总价)*满减金额
                         PmsSkuStock skuStock= getOriginalPrice(promotionProduct, item.getProductSkuId());
+                        if (skuStock == null) {
+                            // SKU 与商品不匹配（脏数据/异常请求）：降级用加购快照价，避免 NPE
+                            fillFallbackPromotionItem(cartPromotionItem, promotionProduct, item);
+                            cartPromotionItemList.add(cartPromotionItem);
+                            continue;
+                        }
                         BigDecimal originalPrice = skuStock.getPrice();
                         BigDecimal reduceAmount = originalPrice.divide(totalAmount,RoundingMode.HALF_EVEN).multiply(fullReduction.getReducePrice());
                         cartPromotionItem.setReduceAmount(reduceAmount);
@@ -257,6 +275,19 @@ public class OmsPromotionServiceImpl implements OmsPromotionService {
             }
         }
         return null;
+    }
+
+    /**
+     * SKU 匹配不到时的降级填充：copyProperties 已把加购时的快照价（item.price）带入，
+     * 这里只补齐原本依赖 SKU 的字段，保证确认单/下单流程不被脏数据打挂。
+     */
+    private void fillFallbackPromotionItem(CartPromotionItem cartPromotionItem,
+                                           PromotionProduct promotionProduct, OmsCartItem item) {
+        cartPromotionItem.setPrice(item.getPrice() == null ? BigDecimal.ZERO : item.getPrice());
+        cartPromotionItem.setReduceAmount(new BigDecimal(0));
+        cartPromotionItem.setRealStock(0);
+        cartPromotionItem.setIntegration(promotionProduct.getGiftPoint());
+        cartPromotionItem.setGrowth(promotionProduct.getGiftGrowth());
     }
 
     /**
