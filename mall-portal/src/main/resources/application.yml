@@ -37,6 +37,7 @@ secure:
       - /druid/**
       - /sso/**
       - /home/**
+      - /seckill/**
       - /product/**
       - /brand/**
       - /alipay/**
