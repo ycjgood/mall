@@ -21,5 +21,7 @@ deploy/es/*.zip
 # 压测产物：含会员 JWT 与一次性下单令牌，禁止入库
 scripts/bench/bench.csv
 scripts/bench/players.tsv
+scripts/bench/bench-*.csv
+scripts/bench/players-*.tsv
 scripts/bench/*.jtl
 scripts/bench/*.log

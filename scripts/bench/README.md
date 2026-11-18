@@ -79,3 +79,33 @@ java -jar mall-portal.jar --mall.rate-limit.enabled=false \
 | lock_stock | 47 | 100 |
 | 吞吐 | 66.7 req/s | 73.5 req/s |
 | P95 | 202 ms | 178 ms |
+
+## 场景 5：秒杀限量（306 并发抢 10 件）
+
+唯一变量：`--mall.order.stock-deduct-mode=redis|db`（关闭限流 `--mall.rate-limit.enabled=false`）。
+
+```sql
+-- 库存压到 10 件，造 306 条购物车（9 个会员 × 34）
+update mall.pms_sku_stock set stock=10, lock_stock=0 where id=201;
+delete from mall.oms_cart_item where product_sku_id=201;
+insert into mall.oms_cart_item(member_id,product_id,product_sku_id,quantity,price,product_name,product_pic,product_attr,delete_status,create_date)
+select m.id, 37, 201, 1, 5699.00, 'iPhone 14 秒杀', '', '秒杀专价', 0, now()
+from (select 1 id union all select 3 union all select 4 union all select 5 union all select 6
+      union all select 7 union all select 8 union all select 9 union all select 10) m
+join (with recursive s as (select 1 n union all select n+1 from s where n<34) select n from s) x;
+
+-- 导出清单 → 预生成令牌
+select c.member_id, a.addr, c.id, m.username from mall.oms_cart_item c
+join (select member_id, max(id) addr from mall.ums_member_receive_address
+      where member_id in (1,3,4,5,6,7,8,9,10) group by member_id) a on a.member_id=c.member_id
+join mall.ums_member m on m.id=c.member_id
+where c.product_sku_id=201 and c.delete_status=0 order by c.id;
+```
+
+```bash
+python prep_tokens.py players-seckill.tsv bench-seckill.csv
+jmeter -n -t order-bench-seckill.jmx -l result-seckill.jtl -j jmeter-seckill.log
+# DB 模式对照：换 order-bench-db306.jmx + bench-db.csv
+```
+
+判定标准：`select stock, lock_stock from pms_sku_stock where id=201` 必须为 `10/10`，订单数恰为 10，Redis `mall:stock:sku:201` 为 0。
