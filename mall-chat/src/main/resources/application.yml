@@ -13,6 +13,10 @@ spring:
   ai:
     ollama:
       base-url: http://localhost:11434
+      chat:
+        options:
+          model: qwen3.5:4b
+          temperature: 0.3
       embedding:
         options:
           model: bge-m3
@@ -30,6 +34,13 @@ spring:
 rag:
   # P0-2 三项验证仅在显式开启时执行（真实向量下断言语义不同）
   verify-enabled: false
+  chat:
+    # 检索条数与上下文长度上限（超出截断，防 prompt 超长）
+    top-k: 4
+    max-context-chars: 3000
+    # 拒答阈值：最佳命中的 Milvus COSINE distance 超过该值视为 query 与知识库无关
+    # 实测分布：商品类问题最佳命中 ~0.29-0.43，无关问题 ~0.58+，取 0.55 分界
+    reject-distance: 0.55
 
 management:
   health:
