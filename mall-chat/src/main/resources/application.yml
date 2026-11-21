@@ -1,0 +1,21 @@
+server:
+  port: 8086
+
+spring:
+  application:
+    name: mall-chat
+  ai:
+    vectorstore:
+      milvus:
+        client:
+          host: 192.168.150.101
+          port: 19530
+        databaseName: default
+        collectionName: mall_knowledge_p0
+        embeddingDimension: 1024
+        metricType: COSINE
+        initialize-schema: true
+
+logging:
+  level:
+    com.macro.mall.chat: info
