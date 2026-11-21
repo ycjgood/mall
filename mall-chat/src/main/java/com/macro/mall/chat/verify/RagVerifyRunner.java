@@ -8,6 +8,7 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -23,6 +24,7 @@ import java.util.Map;
  *
  * 全部通过 = 方案的风险项 9.1-② 排除，mall-chat 可正式采用 Spring AI + Milvus。
  */
+@ConditionalOnProperty(name = "rag.verify-enabled", havingValue = "true")
 @Component
 public class RagVerifyRunner implements ApplicationRunner {
 

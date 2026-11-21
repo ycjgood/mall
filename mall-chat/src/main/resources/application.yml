@@ -4,17 +4,40 @@ server:
 spring:
   application:
     name: mall-chat
+  datasource:
+    # 只读知识源：商品/属性/SKU（价格与库存字段禁止进入语料，见方案 §3.1）
+    url: jdbc:mysql://192.168.150.101:3306/mall?useSSL=false&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
   ai:
+    ollama:
+      base-url: http://localhost:11434
+      embedding:
+        options:
+          model: bge-m3
     vectorstore:
       milvus:
         client:
           host: 192.168.150.101
           port: 19530
         databaseName: default
-        collectionName: mall_knowledge_p0
+        collectionName: mall_knowledge
         embeddingDimension: 1024
         metricType: COSINE
         initialize-schema: true
+
+rag:
+  # P0-2 三项验证仅在显式开启时执行（真实向量下断言语义不同）
+  verify-enabled: false
+
+management:
+  health:
+    # mall-chat 暂不接入 MQ/Redis，禁用 mall-common 传递引入的健康指示器误报
+    rabbit:
+      enabled: false
+    redis:
+      enabled: false
 
 logging:
   level:
