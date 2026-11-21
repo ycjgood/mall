@@ -55,7 +55,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 【注意事项】
  *   - 这里用 GET 是为了方便前端 EventSource 直接连（EventSource 原生只支持 GET）。
  *   - 目前接口没有登录校验，任何人都能问；正式上线前要按方案补限流和鉴权。
- *   - 前端商城（mall-portal-web）暂时还没接这个接口，接法见技术报告「后续扩展建议」。
+ *   - 前端商城（mall-portal-web）右下角的「问小智」悬浮窗已接入本接口：
+ *     浏览器请求 /chat/ask?q=...，由 Vite 的 /chat 代理转发到本服务 8086，
+ *     前端用 fetch 读流（src/api/chat.ts）把每段文字追加到对话气泡里。
+ *     之所以不用 EventSource，是因为需要「停止生成」能力（AbortController）。
  */
 @RestController
 @RequestMapping("/chat")

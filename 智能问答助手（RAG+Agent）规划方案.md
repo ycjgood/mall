@@ -463,7 +463,7 @@ SSE（`text/event-stream`），事件类型：`token`（增量文本）、`tool_
 
 **P0 遗留/移交 P1**：
 1. 灌库为全量重建，商品量大时需改为增量（方案 §3.4：复用 mall.product.sync 队列）
-2. 生成链路未接（OllamaChatModel + qwen3.5 待接入），当前 /chat/search 仅检索不生成答案
+2. ~~生成链路未接~~（此项已由附录 D 完成），当前 /chat/search 仅检索不生成答案，正式问答走 /chat/ask
 3. `mall-chat` 提交在本地待推送（GitHub 直连网络波动）
 
 ## 附录 D：P1 生成链路完成记录（2026-11-21）
@@ -483,9 +483,31 @@ SSE（`text/event-stream`），事件类型：`token`（增量文本）、`tool_
 2. 「今天天气怎么样」→ distance 0.58 > 0.55，即时拒答（未消耗模型）✅
 3. 「三星手机多少钱」→ 不报价格，引导商品页 ✅（首次调用因 CPU 推理慢偶发超时，属 4b 模型算力限制，生产可换 GPU 或更大模型）
 
-**当前代码状态**：mall-chat 三个 commit 在本地待推送（GitHub 直连 Connection reset，网络恢复后 `git -c http.proxy= -c https.proxy= push origin main`）。
+**当前代码状态**：当时三个 commit 曾因 GitHub 直连 Connection reset 滞留本地，网络恢复后已全部推送；现两仓库均与远端同步。
 
 **移交下一步（P1 剩余）**：
-1. mall-portal-web 悬浮对话面板（SSE 消费 /chat/ask）
+1. ~~mall-portal-web 悬浮对话面板~~ **已完成，见附录 E**
 2. 增量灌库（消费 mall.product.sync 队列）
 3. 拒答阈值需在接入 ES 混检后重调（向量盲区问题，方案 §4.2）
+
+---
+
+## 附录 E：P1 悬浮对话面板完成记录（2026-11-21）
+
+**结论：C 端商城右下角「问小智」悬浮窗已上线，顾客在任意页面可直接提问并看到流式回答，P1 的「可见性」目标达成。**
+
+| 项 | 说明 |
+|---|---|
+| 新增 `src/api/chat.ts` | 用原生 fetch + ReadableStream 解析 SSE（axios 会等整段收完，做不出逐字效果）；TextDecoder 用 `stream: true` 防止中文被拆包变乱码；按空行 `\n\n` 切事件；返回 `AbortController` 支持「停止生成」 |
+| 新增 `src/components/ChatWidget.vue` | 悬浮球 + 对话面板：欢迎语、3 条快捷问题、用户/助手气泡、打字机光标、生成中禁用输入、停止/清空按钮、移动端适配、免责提示「价格库存请以商品页为准」 |
+| 修改 `vite.config.ts` | 新增 `/chat` 代理 → `http://localhost:8086`（**不 rewrite**，后端路径本就是 /chat/ask）；/api 仍走 8085 |
+| 修改 `layouts/MainLayout.vue` | 在外壳里挂一次 ChatWidget，全站每页可见；AI 服务独立，挂了不影响下单 |
+| 前端实现要点 | 追加文字时必须用 `messages.value.find(m => m.id === replyId)` 回查响应式代理对象再改，直接改 push 进去的原始对象界面不刷新（Vue3 常见坑） |
+
+**实测**：
+1. `npm run build` 通过（EXIT=0）
+2. 经 5174 代理的「今天天气怎么样」→ 立即返回拒答 + `[DONE]`（不经模型，毫秒级）✅
+3. 经 5174 代理的「iPhone 14 电池容量多大」→ `data:` 事件逐段推送「您好」「，」「我是」… ✅
+4. 8086 直连与 5174 代理响应头均为 `Content-Type: text/event-stream` / `transfer-encoding: chunked`，代理未缓冲 ✅
+
+**遗留 / 下一阶段**：本地 4B 模型 CPU 推理首字偏慢（十几秒级）；无多轮对话记忆；点踩反馈与来源展示未做；8086 与 `/admin/**` 接口仍未加鉴权限流（上线前必补）。
