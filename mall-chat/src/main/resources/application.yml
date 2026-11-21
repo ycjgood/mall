@@ -1,50 +1,69 @@
+# ============================================================================
+# mall-chat（AI 问答模块）配置文件 —— 全项目「换环境只改这一个文件」
+# ============================================================================
+# 小白提示：YAML 靠缩进表示层级，# 开头的是注释。改配置时千万别用 Tab，只用空格。
+# 所有地址都是当前开发环境的实际地址，换电脑时把 IP / 模型名对应改掉即可。
 server:
-  port: 8086
+  port: 8086          # 本服务端口。浏览器访问 http://localhost:8086/chat/ask?q=...
 
 spring:
   application:
-    name: mall-chat
+    name: mall-chat   # 服务名，日志和监控里用来区分是哪个服务
+
   datasource:
-    # 只读知识源：商品/属性/SKU（价格与库存字段禁止进入语料，见方案 §3.1）
+    # 【只读知识源】AI 从这里读商品资料灌进向量库；它只查不改，不会影响交易数据。
+    # ★ 铁律：价格与库存字段禁止进入语料（详见 KnowledgeIndexService 的说明）。
     url: jdbc:mysql://192.168.150.101:3306/mall?useSSL=false&characterEncoding=utf8&serverTimezone=Asia/Shanghai
     username: root
     password: root
     driver-class-name: com.mysql.cj.jdbc.Driver
+
   ai:
     ollama:
+      # 【本地大模型运行器】Ollama 装在本机，不联网、不花钱、商品数据不外传。
+      # 两个模型分工不同，缺一不可：
+      #   bge-m3     → 把文字变成 1024 维向量，负责「查资料」（Embedding）
+      #   qwen3.5:4b → 读资料、组织语言，负责「写回答」（对话生成）
       base-url: http://localhost:11434
       chat:
         options:
           model: qwen3.5:4b
-          temperature: 0.3
+          temperature: 0.3   # 越低越严谨、越少自由发挥；客服场景要稳，所以调低
       embedding:
         options:
           model: bge-m3
+
     vectorstore:
       milvus:
+        # 【向量库】存「语义向量」的专用数据库，跑在 VMware 虚拟机上。
+        # 普通数据库擅长查「等于某值」，向量库擅长查「意思相近」。
         client:
           host: 192.168.150.101
-          port: 19530
+          port: 19530        # Milvus 的 gRPC 端口（3.0 已移除 HTTP 向量接口，只能走这个）
         databaseName: default
-        collectionName: mall_knowledge
-        embeddingDimension: 1024
-        metricType: COSINE
-        initialize-schema: true
+        collectionName: mall_knowledge   # 相当于「表名」，知识都放这里
+        embeddingDimension: 1024        # ★ 必须和 bge-m3 输出维度一致，改模型就要同步改这里
+        metricType: COSINE              # 用余弦距离衡量相似度，值越小越相近
+        initialize-schema: true         # 启动时自动建表（已存在则跳过，不会清空已有数据）
 
 rag:
-  # P0-2 三项验证仅在显式开启时执行（真实向量下断言语义不同）
+  # 【技术验证开关】默认 false。改成 true 时才会运行 RagVerifyRunner 那套体检脚本。
+  # 平时务必保持 false，否则会往知识库里写测试用的假商品数据。
   verify-enabled: false
+
   chat:
-    # 检索条数与上下文长度上限（超出截断，防 prompt 超长）
-    top-k: 4
-    max-context-chars: 3000
-    # 拒答阈值：最佳命中的 Milvus COSINE distance 超过该值视为 query 与知识库无关
-    # 实测分布：商品类问题最佳命中 ~0.29-0.43，无关问题 ~0.58+，取 0.55 分界
+    # ---------- 问答参数（调 AI 效果主要就是动这三个数） ----------
+    top-k: 4                  # 每次给大模型翻几页参考书：太少漏信息，太多掺噪音
+    max-context-chars: 3000   # 参考资料总长度上限，防止撑爆模型输入 / 拖慢生成
+    # 拒答阈值：最佳命中的「余弦距离」超过它就认定「知识库里没这事」，直接拒答。
+    # 实测分布：商品类问题最佳命中 ~0.29-0.43，无关问题 ~0.58+，取 0.55 分界。
+    # 换商品库或新增政策类文档后，需要重新采样再调这个值。
     reject-distance: 0.55
 
 management:
   health:
-    # mall-chat 暂不接入 MQ/Redis，禁用 mall-common 传递引入的健康指示器误报
+    # mall-chat 不接 RabbitMQ / Redis，但公共模块把这些健康检查带进来了，
+    # 不关掉会连不上 localhost 而让 /actuator/health 误报 DOWN。
     rabbit:
       enabled: false
     redis:
@@ -52,4 +71,4 @@ management:
 
 logging:
   level:
-    com.macro.mall.chat: info
+    com.macro.mall.chat: info   # 本模块日志级别；排查问答问题时可临时改成 debug

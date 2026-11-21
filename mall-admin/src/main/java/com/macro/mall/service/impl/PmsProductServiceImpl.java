@@ -26,7 +26,28 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * 商品管理Service实现类
+ * 后台「商品管理」Service 实现类：新建商品、编辑商品、改上下架/推荐/新品/审核/删除状态都在这里。
+ * <p>
+ * 【这个类是干什么的】属于 mall-admin 后台服务（端口 8080）。运营在管理后台对商品做的任何改动，
+ * 最终都通过这里写进 MySQL；同时——这也是本轮改造的重点——每次改动后都要「通知搜索服务更新 ES」。
+ * <p>
+ * 【为什么每个商品变更入口都要触发 ProductSyncSender】
+ * 前台搜索用的 ES 索引是另一份数据（可理解成从数据库抄出去的一本「商品目录」），
+ * 它不会自动跟着 MySQL 变。只要商品有任何变动而没通知搜索服务，目录就会和真实商品对不上：
+ * 改了价格搜到旧价、下架了还能搜到、删除了还挂在结果里。
+ * 所以本类里凡是会改变商品的地方，写库成功后都要调 productSyncSender.syncAfterCommit(...)
+ * 发一条消息：「这些商品 id 变了」，让 mall-search 收到后重新查库、把索引改成最新（或把文档删掉）。
+ * 一共有 7 个这样的入口：create(新建)、update(整体编辑)、updateVerifyStatus(审核)、
+ * updatePublishStatus(上下架)、updateRecommendStatus(推荐)、updateNewStatus(新品标记)、
+ * updateDeleteStatus(删除)。漏掉任何一个，都会造成 ES 与数据库不一致。
+ * <p>
+ * 【为什么是 syncAfterCommit 而不是直接发】「AfterCommit」指「等数据库事务成功提交之后再发」。
+ * 事务是一批数据库操作要么全成功、要么全撤销；如果消息在事务里就发出去，
+ * 搜索服务可能比提交更早去查库、查到的是旧数据，或事务回滚了消息却已发出、去同步一笔没生效的改动。
+ * 挂在提交后发，才能保证「库里真的变了」才通知。
+ * <p>
+ * 【依赖什么】MySQL（通过 mall-mbg 的实体与 Mapper/DAO）、RabbitMQ（消息队列，发同步消息）；
+ * 不直接连 Elasticsearch，ES 的更新由 mall-search 消费消息后完成。
  * Created by macro on 2018/4/26.
  */
 @Service
@@ -95,6 +116,8 @@ public class PmsProductServiceImpl implements PmsProductService {
         //关联优选
         relateAndInsertList(prefrenceAreaProductRelationDao, productParam.getPrefrenceAreaProductRelationList(), productId);
         count = 1;
+        // 新建商品也要通知搜索服务：等事务提交后发同步消息，让它把这件新商品写进 ES 索引，
+        // 否则后台刚上架的商品在前台搜不到（7 个变更入口之一）
         productSyncSender.syncAfterCommit(Collections.singletonList(productId), "create");
         return count;
     }
@@ -162,6 +185,8 @@ public class PmsProductServiceImpl implements PmsProductService {
         prefrenceAreaProductRelationMapper.deleteByExample(prefrenceAreaExample);
         relateAndInsertList(prefrenceAreaProductRelationDao, productParam.getPrefrenceAreaProductRelationList(), id);
         count = 1;
+        // 编辑商品会改到名称/价格/图片等搜索用字段，提交后必须通知搜索服务覆盖 ES 文档，
+        // 否则搜到的还是旧内容（7 个变更入口之一）
         productSyncSender.syncAfterCommit(Collections.singletonList(id), "update");
         return count;
     }

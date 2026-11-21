@@ -29,7 +29,19 @@ import java.util.stream.Collectors;
 
 
 /**
- * 搜索商品管理Service实现类
+ * 搜索商品管理 Service 实现类：真正去 MySQL 查商品、往 Elasticsearch 写索引、对外提供搜索的地方。
+ * <p>
+ * 【这个类是干什么的】它实现上面 EsProductService 那张能力清单。
+ * 「索引」可以类比成图书的「目录卡片」：ES 里存的是一份专门用来查得快的商品目录，
+ * 本类负责两件事——① 把 MySQL 里的商品整理成目录卡片写进 ES（importAll 全量、sync 增量）；
+ * ② 用户搜索时，按关键字、品牌、分类、排序条件去 ES 里查，把结果翻成页面要的分页数据。
+ * <p>
+ * 【数据怎么流】后台(mall-admin) 改商品 → 发 RabbitMQ 消息 → 本服务的消费者调用 sync(id) →
+ * 回 MySQL 查这件商品的最新数据 → 查得到就写入/覆盖 ES 文档，查不到（下架/删除）就删掉 ES 文档。
+ * 这样 ES 目录始终和库房真实在售商品一致。
+ * <p>
+ * 【本轮重点】sync(id) 特意补上了原版「下架不删文档」的缺陷：原 create(id) 查不到商品时什么都不做，
+ * 会让已下架商品一直留在搜索结果里；sync 改成查不到就 deleteById，把旧文档摘掉。
  * Created by macro on 2018/6/19.
  */
 @Service
@@ -83,6 +95,17 @@ public class EsProductServiceImpl implements EsProductService {
         }
     }
 
+    /**
+     * 同步一件商品在 ES 里的目录卡片，是「商品变更消息」最终落地的地方。
+     * <p>
+     * 逻辑就一句话：回 MySQL 查这个 id 的商品，查得到（在架）就写入/覆盖 ES 文档，
+     * 查不到（已下架/已删除）就把 ES 里那张旧文档删掉。下面的行内注释解释了查询 SQL
+     * 为什么自带「未删除 + 已上架」过滤；这里补充整体意图：
+     * 原版只有 create(id)，商品下架时查不到就什么都不做，旧文档会一直留在索引里被搜出来，
+     * sync(id) 用「查不到就 deleteById」把这最后一环补上，保证搜得到的都是真正在卖的商品。
+     *
+     * @return true=索引已写入（商品在架）；false=文档已删除或无变更
+     */
     @Override
     public boolean sync(Long id) {
         if (id == null) {

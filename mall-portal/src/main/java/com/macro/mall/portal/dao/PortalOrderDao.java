@@ -7,7 +7,17 @@ import org.apache.ibatis.annotations.Param;
 import java.util.List;
 
 /**
- * 前台订单管理自定义Dao
+ * 前台订单管理自定义Dao（数据访问层）。
+ * <p>
+ * 【这个类是干什么的】它属于 mall-portal（买家端服务）的「数据库读写窗口」：
+ * 订单相关的复杂 SQL（查订单连明细、按条件关单、锁定/释放库存等）都在这里声明方法，
+ * 真正的 SQL 语句写在对应的 XML 映射文件里，由 MyBatis 按方法名对上并执行。
+ * 上层的 OmsPortalOrderServiceImpl 只管调这些方法，不用自己写 SQL。
+ * <p>
+ * 【依赖什么】只连 MySQL（通过 mall-mbg 的实体和本模块的自定义映射），
+ * 不直接碰 Redis / RabbitMQ / Elasticsearch；但方法设计上配合上层的幂等与库存预扣逻辑：
+ * 例如 closeUnpaidOrder、lockSkuStock 都用「带条件的一条 UPDATE」，
+ * 由数据库保证同一笔订单不会被重复关、库存不会被超卖（各方法下方注释有详细解释）。
  * Created by macro on 2018/9/4.
  */
 public interface PortalOrderDao {

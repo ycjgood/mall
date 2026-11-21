@@ -1,4 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+    ============================================================================
+    mall-chat 的「零件清单」（Maven 构建文件）
+    ============================================================================
+    小白解释：Java 项目不会把所有功能都自己写，而是像搭积木一样引用别人写好的
+    「依赖包」。这个文件就是告诉 Maven：「请帮我下载下面这些积木，并管好版本」。
+
+    本模块一共用了 5 类积木：
+      1) mall-common          —— 本项目自己的公共模块（统一返回结构、工具类）
+      2) spring-boot-starter-web   —— 让程序能对外提供 HTTP 接口（网页/浏览器能调）
+      3) spring-ai-starter-vector-store-milvus —— Spring AI 官方的 Milvus 向量库适配器，
+                                    帮我们屏蔽「建表、转向量、算相似度」的底层细节
+      4) spring-ai-starter-model-ollama —— 连接本机 Ollama，同时提供 Embedding 和对话模型
+      5) jdbc + mysql-connector-j —— 用原生 SQL 只读查询商品数据
+
+    ★ 版本注意事项（踩过坑）：
+      Spring AI 选 1.1.8。2.x 版本线已经迁到 Spring Boot 4 基线，
+      和本项目 Mall 用的 Spring Boot 3.5.14 不兼容，装上会启动失败。
+      BOM 的作用是统一管住所有 spring-ai-* 依赖的版本，避免各包版本互相打架。
+-->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -13,8 +33,11 @@
     <description>mall 智能问答模块（RAG + Agent），独立于交易主链路</description>
 
     <properties>
+        <!-- Spring AI 1.1.x：兼容 Spring Boot 3.5；2.x 已迁 Boot 4 基线不可用 -->
         <spring-ai.version>1.1.8</spring-ai.version>
     </properties>
+
+    <!-- dependencyManagement 只「声明版本」不真正引入依赖，下面 <dependencies> 才是实际使用 -->
 
     <dependencyManagement>
         <dependencies>

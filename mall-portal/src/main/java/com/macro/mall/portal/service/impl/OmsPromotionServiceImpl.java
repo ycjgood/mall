@@ -17,14 +17,43 @@ import java.math.RoundingMode;
 import java.util.*;
 
 /**
+ * 购物车优惠计算 Service 实现类。
+ * <p>
+ * 【这个类是干什么的】用户在购物车勾选商品、点「去结算」时，页面要显示每件商品
+ * 「原价多少、优惠多少、实付多少」。这些优惠金额就是这里算出来的。
+ * 支持三类促销：单品促销（直接给个促销价）、打折（买够几件打几折）、满减（满多少减多少），
+ * 都不满足就按「无优惠」处理。核心方法见 calcCartPromotion。
+ * <p>
+ * 【为什么要小心「SKU 对不上」】购物车里存的是用户「加购那一刻」记下的 SKU 编号和价格快照
+ * （SKU 指商品的具体规格，比如「红色 / XL」，每个规格有自己的价格和库存）。
+ * 但商品可能后来被改过：下架了、SKU 被删了、或请求里带了脏数据。
+ * 算优惠时要拿 SKU 编号去当前价格表里找原价，一旦找不到就返回 null；
+ * 如果这时还硬去取 null 的价格，Java 会抛「空指针异常 NPE」（对着一个不存在的东西取值，程序直接崩），
+ * 整个确认订单页就打不开了。所以本类专门做了降级：找不到就退回用加购时的快照价、优惠按 0 算，
+ * 保证页面照常展示。详见 calcCartPromotion 里的分支和 fillFallbackPromotionItem。
  * Created by macro on 2018/8/27.
- * 促销管理Service实现类
  */
 @Service
 public class OmsPromotionServiceImpl implements OmsPromotionService {
     @Autowired
     private PortalProductDao portalProductDao;
 
+    /**
+     * 计算购物车里每件商品的促销优惠，返回带「优惠后金额」的清单给确认订单页用。
+     * <p>
+     * 大体三步（对应代码里的 1、2、3）：
+     * 1) 按商品(productId)把购物车条目分组——因为优惠是按「同一个商品买了多少」整体算的；
+     * 2) 一次性查出这些商品的促销规则和各规格(SKU)的价格、库存；
+     * 3) 逐组按促销类型（单品/打折/满减/无优惠）套公式，算出每件便宜多少。
+     * <p>
+     * 【本轮重点改造：SKU 对不上时的降级】每个促销分支里都要先用 getOriginalPrice 按购物车
+     * 记下的 SKU 编号去当前价格表找原价。商品被改过、SKU 被删或请求带脏数据时可能找不到（返回 null）。
+     * 若不处理继续往下走，紧接着的skuStock.getPrice() 就是对 null 取值 → 抛空指针异常 NPE，
+     * 确认订单页直接崩掉。所以三处分支统一判断 skuStock == null 就调 fillFallbackPromotionItem：
+     * 退回用「加购那一刻的快照价」（BeanUtils.copyProperties 已经把 item.price 带进来了），
+     * 优惠金额记 0、可售库存记 0，让这条商品仍能正常显示，而不是让整页报错。
+     * 一句话：宁可这一件不算优惠，也不能因为一条脏数据让用户连订单页都打不开。
+     */
     @Override
     public List<CartPromotionItem> calcCartPromotion(List<OmsCartItem> cartItemList) {
         //1.先根据productId对CartItem进行分组，以spu为单位进行计算优惠
